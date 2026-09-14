@@ -77,7 +77,7 @@ fun SettingsScreen(viewModel: GalaxyHzViewModel) {
     Spacer(Modifier.height(16.dp))
     SectionHeader(L10n.t("about", lang).uppercase())
     Spacer(Modifier.height(8.dp))
-    TitledCard("GalaxyHz v2.1") {
+    TitledCard("GalaxyHz v2.2") {
         InfoNote(
             "Forces 120/96/60 Hz and any panel-supported rate on Samsung Galaxy " +
                 "S20-series devices on AOSP ROMs. Material 3 Expressive UI, " +

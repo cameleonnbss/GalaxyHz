@@ -1,31 +1,33 @@
 package com.example.galaxyhz.ui.screens
 
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.galaxyhz.theme.ErrorRed
-import com.example.galaxyhz.theme.ExpressiveShapes
 import com.example.galaxyhz.theme.NeonAmber
 import com.example.galaxyhz.theme.NeonCyan
 import com.example.galaxyhz.theme.NeonEmerald
 import com.example.galaxyhz.ui.Dest
-import com.example.galaxyhz.ui.L10n
 import com.example.galaxyhz.ui.GalaxyHzViewModel
+import com.example.galaxyhz.ui.L10n
+import com.example.galaxyhz.ui.components.ExpressiveButtons
+import com.example.galaxyhz.ui.components.ExpressiveSection
 import com.example.galaxyhz.ui.components.HzSegmentedRow
 import com.example.galaxyhz.ui.components.LockCard
+import com.example.galaxyhz.ui.components.ModeCard
 import com.example.galaxyhz.ui.components.SectionHeader
+import com.example.galaxyhz.ui.components.SpringyHzChip
 import com.example.galaxyhz.ui.components.StatusHero
 import com.example.galaxyhz.ui.components.TitledCard
 
@@ -52,13 +54,21 @@ fun HomeScreen(viewModel: GalaxyHzViewModel) {
     )
 
     Spacer(Modifier.height(8.dp))
-    Text(
-        if (status.fpsSource == "surfaceflinger") "read from SurfaceFlinger (root)"
-        else if (status.fpsSource == "display") "read from DisplayManager"
-        else "waiting for reading...",
-        fontSize = 11.sp,
-        color = MaterialTheme.colorScheme.outline
-    )
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            if (status.fpsSource == "surfaceflinger") "read from SurfaceFlinger (root)"
+            else if (status.fpsSource == "display") "read from DisplayManager"
+            else "waiting for reading...",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.outline
+        )
+        if (status.activeModeHz > 0) {
+            SpringyHzChip(status.activeModeHz, accent)
+        }
+    }
 
     if (!status.hasRoot) {
         Spacer(Modifier.height(8.dp))
@@ -71,7 +81,6 @@ fun HomeScreen(viewModel: GalaxyHzViewModel) {
     SectionHeader("REFRESH RATE")
     Spacer(Modifier.height(8.dp))
 
-    // Signature M3 Expressive segmented control for the three main rates.
     val standardRates = status.availableModes.filter { !it.experimental && it.width == 1080 }
         .map { it.hz }.distinct().sortedDescending().take(3).ifEmpty { listOf(120, 96, 60) }
     HzSegmentedRow(
@@ -98,7 +107,7 @@ fun HomeScreen(viewModel: GalaxyHzViewModel) {
     mainModes.forEachIndexed { i, mode ->
         val cardAccent = when (i) { 0 -> NeonCyan; 1 -> NeonEmerald; else -> NeonAmber }
         Spacer(Modifier.height(8.dp))
-        com.example.galaxyhz.ui.components.ModeCard(
+        ModeCard(
             title = when (mode.hz) {
                 120 -> "120 Hz - Ultra Smooth"
                 96 -> "96 Hz - Eco Smooth (recommended)"
@@ -120,13 +129,23 @@ fun HomeScreen(viewModel: GalaxyHzViewModel) {
     Spacer(Modifier.height(16.dp))
     SectionHeader("QUICK ACTIONS")
     Spacer(Modifier.height(8.dp))
-    com.example.galaxyhz.ui.components.LockCard(
-        locked = status.refreshRateLocked,
-        busy = busy,
-        hasRoot = status.hasRoot,
-        lang = lang,
-        onLock = { viewModel.lockRefreshRate() }
-    )
+    ExpressiveSection {
+        ExpressiveButtons(
+            listOf(
+                Triple("Lock rate", NeonEmerald) { viewModel.lockRefreshRate() },
+                Triple(
+                    if (status.isAodEnabled) "AOD: ON" else "AOD: off",
+                    NeonAmber
+                ) { viewModel.toggleAod(!status.isAodEnabled) },
+                Triple("FIX TOOLS", NeonCyan) { viewModel.selectDest(Dest.TOOLS) },
+                Triple("96 ECO", NeonEmerald) {
+                    status.availableModes.firstOrNull { it.hz == 96 && !it.experimental }
+                        ?.let { viewModel.applyMode(it) }
+                }
+            ),
+            enabled = !busy && status.hasRoot
+        )
+    }
 
     Spacer(Modifier.height(16.dp))
     TitledCard("OUTPUT") {

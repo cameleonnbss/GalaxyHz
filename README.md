@@ -20,8 +20,15 @@ locked in the HS clock region — no more mid-frame desync, sparkle or static.
 | **Experimental** — hidden HS panel modes | **Tools** — verified lock, AOD, DDI reset |
 
 A modal navigation drawer (hamburger menu) holds everything, plus a
-**Quick Settings tile** that cycles 120 → 96 → 60 Hz and a **home-screen widget**
-with direct 60 / 96 / 120 buttons and a big live rate readout that cycles on tap.
+**Quick Settings tile** that cycles 120 → 96 → 60 Hz and **three home-screen
+widgets**:
+
+| Widget | What it does |
+|---|---|
+| **Rate** (4×1) | Direct 60 / 96 / 120 buttons + big live rate readout that cycles on tap |
+| **Cycle** (1×1) | Shows the live rate; one tap cycles 120 → 96 → 60 |
+| **FIX** (1×1) | One tap runs the verified anti-flicker lock (idle timer 0, content detection off) |
+
 The launcher ships a custom adaptive icon (speedometer + Hz bolt).
 
 The live FPS readout never sits at 0: it comes from DisplayManager, and when that
@@ -74,7 +81,9 @@ returns nothing the app falls back to SurfaceFlinger's real render rate over roo
   so you can inspect or re-flash it from any file manager.
 - **Real Material 3 Expressive** — `material3 1.5.0-alpha` with
   `ExperimentalMaterial3ExpressiveApi`: `MotionScheme.expressive()` spring physics,
-  `LoadingIndicator`, expressive shapes, drawer-based navigation.
+  `LoadingIndicator`, expressive shapes (rounded, cut-corner *burst*, scalloped
+  *cookie*), gradient accent washes, animated FPS bar and pulsing glow ring,
+  drawer-based navigation.
 
 ## The truth about "overclocking" phone panels
 
@@ -95,7 +104,7 @@ write; nothing breaks.
 
 ### App
 ```bash
-adb install GalaxyHz_v2.1.apk
+adb install GalaxyHz_v2.2.apk
 ```
 First launch shows the setup wizard; grant the Magisk superuser prompt when it appears.
 

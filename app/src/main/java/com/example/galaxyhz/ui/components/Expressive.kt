@@ -3,6 +3,12 @@ package com.example.galaxyhz.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.getValue
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -98,7 +104,7 @@ fun ModeCard(
     }
 }
 
-/** Big status card with the animated FPS readout. */
+/** Big status card with animated FPS bar, gradient wash and pulsing ring. */
 @Composable
 fun StatusHero(
     fps: Int,
@@ -108,6 +114,15 @@ fun StatusHero(
     accent: Color,
     badge: String
 ) {
+    val ringAlpha by rememberInfiniteTransition(label = "ring").animateFloat(
+        initialValue = 0.45f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            tween(1100),
+            RepeatMode.Reverse
+        ),
+        label = "ringAlpha"
+    )
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -115,13 +130,13 @@ fun StatusHero(
         shape = ExpressiveShapes.cardBig,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
+        Box {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(accentGradient(accent))
+            )
+            Column(Modifier.padding(20.dp)) {
                 Text(
                     badge,
                     fontSize = 12.sp,
@@ -130,7 +145,9 @@ fun StatusHero(
                     letterSpacing = 1.sp
                 )
                 Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.Bottom) {
+                Row(
+                    verticalAlignment = Alignment.Bottom
+                ) {
                     Text(
                         "$fps",
                         fontSize = 44.sp,
@@ -144,20 +161,24 @@ fun StatusHero(
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.padding(bottom = 8.dp, start = 2.dp)
                     )
+                    Spacer(Modifier.weight(1f))
+                    PulsingGlow(accent, modifier = Modifier.padding(bottom = 14.dp))
                 }
-                Spacer(Modifier.height(4.dp))
+                AnimatedFpsBar(fps = fps, maxHz = 120, accent = accent)
+                Spacer(Modifier.height(8.dp))
                 Text(line1, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(line2, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Box(
                 modifier = Modifier
-                    .padding(start = 12.dp)
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 20.dp)
                     .background(
-                        Brush.radialGradient(listOf(accent.copy(alpha = 0.35f), Color.Transparent)),
+                        Brush.radialGradient(listOf(accent.copy(alpha = 0.30f), Color.Transparent)),
                         CircleShape
                     )
-                    .border(2.dp, accent, CircleShape)
-                    .padding(18.dp),
+                    .border(2.dp, accent.copy(alpha = ringAlpha), CircleShape)
+                    .padding(16.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(

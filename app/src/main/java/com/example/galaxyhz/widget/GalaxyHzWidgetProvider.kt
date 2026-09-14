@@ -3,21 +3,18 @@ package com.example.galaxyhz.widget
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
 import com.example.galaxyhz.R
-import com.example.galaxyhz.data.DeviceProfiles
-import com.example.galaxyhz.data.RefreshRateManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * Home-screen widget: tap 60 / 96 / 120 to apply that rate directly, or the
- * big number to cycle 120 -> 96 -> 60. Works without opening the app.
+ * 4x1 widget: tap 60 / 96 / 120 to apply that rate directly, or the big
+ * number to cycle 120 -> 96 -> 60. Works without opening the app.
  */
 class GalaxyHzWidgetProvider : AppWidgetProvider() {
 
@@ -29,55 +26,23 @@ class GalaxyHzWidgetProvider : AppWidgetProvider() {
         appWidgetIds: IntArray
     ) {
         for (id in appWidgetIds) appWidgetManager.updateAppWidget(id, buildViews(context))
-        scope.launch { refreshCurrent(context) }
+        scope.launch { WidgetActions.refreshRates(context) }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         val hz = intent.getIntExtra(EXTRA_HZ, Int.MIN_VALUE)
         if (hz == Int.MIN_VALUE) return
+        // Keep the process alive until the root work completes.
+        val pending = goAsync()
         scope.launch {
-            val profile = DeviceProfiles.detect()
-            if (hz == CYCLE) {
-                val current = RefreshRateManager.actualRenderRate()
-                val next = when {
-                    current >= 115 -> 96
-                    current >= 90 -> 60
-                    else -> 120
-                }
-                apply(context, profile, next)
-            } else {
-                apply(context, profile, hz)
+            try {
+                if (hz == CYCLE) WidgetActions.cycle(context)
+                else WidgetActions.applyHz(context, hz)
+            } finally {
+                pending.finish()
             }
-            refreshCurrent(context)
         }
-    }
-
-    private suspend fun apply(
-        context: Context,
-        profile: com.example.galaxyhz.data.DeviceProfile,
-        hz: Int
-    ) {
-        val modes = RefreshRateManager.discoverPanelModes(profile)
-        val mode = modes.firstOrNull { it.hz == hz && !it.experimental }
-            ?: modes.firstOrNull { it.hz == hz }
-        if (mode != null) {
-            RefreshRateManager.applyMode(
-                profile, mode.width, mode.height, mode.hz, mode.panelIndex
-            )
-        } else {
-            RefreshRateManager.applyMode(profile, 1080, 2400, hz, null)
-        }
-    }
-
-    /** Reads the live render rate back into the widget's big number. */
-    private suspend fun refreshCurrent(context: Context) {
-        val hz = RefreshRateManager.actualRenderRate().takeIf { it > 0 } ?: return
-        val views = buildViews(context)
-        views.setTextViewText(R.id.widget_current, "$hz")
-        AppWidgetManager.getInstance(context).updateAppWidget(
-            ComponentName(context, GalaxyHzWidgetProvider::class.java), views
-        )
     }
 
     private fun buildViews(context: Context): RemoteViews {
