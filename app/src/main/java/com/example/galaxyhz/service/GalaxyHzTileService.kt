@@ -2,8 +2,9 @@ package com.example.galaxyhz.service
 
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import com.example.galaxyhz.data.HzMode
+import com.example.galaxyhz.data.PanelMode
 import com.example.galaxyhz.data.RefreshRateManager
+import com.example.galaxyhz.data.DeviceProfiles
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -11,8 +12,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Quick Settings tile that cycles 120 -> 96 -> 60 Hz on tap.
- * Label shows the current/last-applied rate; the tile is unavailable without root.
+ * Quick Settings tile that cycles 120 -> 96 -> 60 Hz (whatever standard modes
+ * the panel exposes), using the same engine as the app.
  */
 class GalaxyHzTileService : TileService() {
 
@@ -31,28 +32,34 @@ class GalaxyHzTileService : TileService() {
     override fun onClick() {
         super.onClick()
         serviceScope.launch {
-            val current = RefreshRateManager.getStatus(applicationContext).targetMode
-            val next = when (current) {
-                HzMode.H120 -> HzMode.H96
-                HzMode.H96 -> HzMode.H60
-                HzMode.H60 -> HzMode.H120
-            }
-            updateTileState(next)
-            RefreshRateManager.applyRefreshRate(next.hz)
-            updateTileState(next)
+            val context = applicationContext
+            val status = RefreshRateManager.getStatus(context)
+            val standard = status.availableModes
+                .filter { !it.experimental && it.width == 1080 }
+                .sortedByDescending { it.hz }
+                .ifEmpty { listOf(PanelMode(1080, 2400, 120, "HS", "1"), PanelMode(1080, 2400, 96, "HS", "2"), PanelMode(1080, 2400, 60, "NS", "3")) }
+
+            val currentIdx = standard.indexOfFirst { it.hz == status.activeModeHz }
+            val next = standard[(currentIdx + 1).mod(standard.size)]
+
+            updateTileState(next.hz)
+            RefreshRateManager.applyMode(
+                DeviceProfiles.detect(), next.width, next.height, next.hz, next.panelIndex
+            )
+            updateTileState(next.hz)
         }
     }
 
-    private fun updateTileState(override: HzMode? = null) {
+    private fun updateTileState(overrideHz: Int? = null) {
         val tile = qsTile ?: return
         serviceScope.launch {
-            val mode = override ?: RefreshRateManager.getStatus(applicationContext).targetMode
+            val hz = overrideHz ?: RefreshRateManager.getStatus(applicationContext).activeModeHz
             tile.state = Tile.STATE_ACTIVE
-            tile.label = "${mode.hz} Hz"
-            tile.subtitle = when (mode) {
-                HzMode.H120 -> "Ultra Smooth"
-                HzMode.H96 -> "Eco Smooth"
-                HzMode.H60 -> "Battery Saver"
+            tile.label = "$hz Hz"
+            tile.subtitle = when (hz) {
+                120 -> "Ultra Smooth"
+                96 -> "Eco Smooth"
+                else -> "Battery Saver"
             }
             tile.updateTile()
         }

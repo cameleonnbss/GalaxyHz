@@ -1,61 +1,91 @@
-# GalaxyHz — Force 120 / 96 / 60 Hz on Samsung Galaxy S20 (x1s)
+# GalaxyHz — Force 120 / 96 / 60 Hz & more on Samsung Galaxy devices
 
-A tiny root app + Magisk module that **forces 120 Hz, 96 Hz or 60 Hz** on Galaxy S20-series
-phones running AOSP-based ROMs (Evolution X, LineageOS, crDroid, /e/OS…) that lack Samsung's
-One UI refresh-rate service.
+A Material 3 **Expressive** root app + Magisk module that **forces any refresh rate your
+panel supports** — 120 Hz, 96 Hz, 60 Hz, even the *hidden* intermediate HS clocks
+(100 / 104 / 110 / 112 Hz) — on Samsung Galaxy phones running AOSP-based ROMs
+(Evolution X, LineageOS, crDroid…) that lack Samsung's One UI refresh-rate service.
 
-Everything is written through **four layers** so the rate really sticks:
+Panel modes are **discovered at runtime** from the device's own mode table
+(`/sys/.../panel/display_mode`), so the app adapts to your exact hardware instead of
+hardcoding one phone. Verified live on a Galaxy S20 (SM-G981B, `x1s`) on
+Evolution X / Android 16: SurfaceFlinger reports `renderRate=120.00 Hz` with the panel
+locked in the HS clock region — no more mid-frame desync, sparkle or static.
 
-1. `cmd display set-user-preferred-display-mode` (DisplayManager / SurfaceFlinger)
-2. `settings put system|secure|global ...` (framework refresh-rate policy)
-3. `wm size` (render resolution)
-4. `/sys/devices/platform/panel_drv@0/lcd/panel/display_mode` (direct panel driver mode)
+## Screens
 
-Verified live on a Galaxy S20 (SM-G981B, `x1s`) running Evolution X / Android 16:
-SurfaceFlinger reports `renderRate=120.00 Hz` (or 96.00) with the panel locked in the
-HS clock region — no more mid-frame clock desync, sparkle or static.
+| | |
+|---|---|
+| **Home** — live FPS, three main modes, quick lock | **Resolution** — FHD+ / WQHD+ switching |
+| **Custom rate** — 24–240 Hz slider (frame-paced) | **Adaptive** — fixed / stock / custom range |
+| **Experimental** — hidden HS panel modes | **Tools** — verified lock, AOD, DDI reset |
+
+A modal navigation drawer (hamburger menu) holds everything, and a
+**Quick Settings tile** cycles 120 → 96 → 60 Hz without opening the app.
 
 ## Features
 
-### 📱 GalaxyHz app
-- **One-tap switching** between **120 Hz** (ultra smooth), **96 Hz** (eco smooth —
-  recommended: feels like 120 Hz with far less heat and +30% battery) and **60 Hz**
-  (battery saver).
-- **Live status** — current FPS, active panel mode (`1080x2400_120HS`…), resolution
-  and root state, refreshed every 2 s.
-- **Adaptive behavior settings**
-  - *Lock refresh rate* — kills SurfaceFlinger idle/content detection so the panel
-    never drops to 60 Hz when content is static (flicker source #1).
-  - *AOD toggle* — Always-On Display is the main flicker source on S20 OLED
-    (60 Hz / AID clock region); toggle it safely from the app.
-- **Flicker protection tools** (for when static/sparkle already happened)
-  1. *Apply anti-flicker props* — resets SurfaceFlinger idle/touch/power timers.
-  2. *Repair mode on all layers* — re-writes DisplayManager, settings, wm and panel mode.
-  3. *Emergency panel reset (Reset DDI)* — power-cycles the display controller;
-     clears mid-frame artifacts instantly.
-- **Quick Settings tile** — cycles 120 → 96 → 60 Hz from the notification shade,
-  no need to open the app.
+### Modes
+- **One-tap panel modes** — every primary mode your driver exposes (S20: 120HS / 96HS /
+  60NS), each written through four layers so it sticks:
+  1. `cmd display set-user-preferred-display-mode` (DisplayManager / SurfaceFlinger)
+  2. `settings put system|secure|global ...` (framework refresh policy)
+  3. `wm size` (render resolution)
+  4. `echo <index> > .../panel/display_mode` (direct panel driver write, index resolved
+     at runtime from the device's mode table)
+- **Custom rate (24–240 Hz slider)** — Android advertises any 0.1 Hz-step rate to apps
+  while the panel scans at its nearest real clock, with frame pacing in between.
+  Great for 24 fps video (24/48 Hz) or fine battery tuning.
+- **Hidden / experimental modes** — panels ship with intermediate HS clocks Samsung
+  never exposed (S20: 100/104/110/112 Hz). The app lists what *your* driver reports
+  and writes them directly, then reads back whether the panel took the mode.
+- **Resolution switching** — FHD+ ↔ WQHD+ on panels that support both.
 
-### 📦 Magisk module (`force_120hz_x1s.zip`)
-- Re-applies the persisted mode (default **120 Hz**) at every boot.
-- Applies anti-flicker SurfaceFlinger props early (`post-fs-data`) and again at boot.
-- **Action button** in the Magisk app (Modules tab) re-applies the mode on demand.
-- Config file `/data/adb/force_hz.conf` — write `96` or `60` to switch, `120` to go back.
-- Log: `/data/local/tmp/force_120hz_x1s.log` (contains a full state dump).
+### Adaptive behavior
+- **Fixed** — kills SurfaceFlinger idle/content detection: the anti-flicker default.
+  The app *verifies* the result by reading back props and settings and shows exactly
+  which layer failed, instead of pretending it worked.
+- **Adaptive (stock)** — restores content detection for battery saving.
+- **Adaptive with custom range** — the system adapts but stays inside a min/max you
+  choose (e.g. 60–120 Hz, or 96–96 to emulate a fixed rate).
+
+### Flicker protection & recovery
+- **Lock refresh rate (apply + verify)** — idle timer 0, content detection off,
+  min = peak; each layer checked and reported.
+- **AOD toggle** — Always-On Display runs the panel in its 60 Hz/AID clock region and
+  is the main flicker source on S20 OLED; toggle it safely from the app.
+- **Emergency DDI reset** — power-cycles the display controller; clears static,
+  sparkle and glitch bands instantly.
+
+### Setup & polish
+- **First-run setup wizard** — explains what the app does, offers a direct shortcut to
+  Magisk for the superuser prompt, and can be skipped for non-root status reading.
+- **Language setting** — English base with French translation built in.
+- **Real Material 3 Expressive** — `material3 1.5.0-alpha` with
+  `ExperimentalMaterial3ExpressiveApi`: `MotionScheme.expressive()` spring physics,
+  `LoadingIndicator`, expressive shapes, drawer-based navigation.
+
+## The truth about "overclocking" phone panels
+
+Phone DDICs (display controllers) ship with a **fixed mode table burned in at the
+factory**. Unlike PC monitors, there is no free-running pixel clock: a mode that is not
+in the table physically cannot scan out. What *is* possible — and what this app does —
+is use **every mode already in the table**, including the hidden intermediate HS clocks
+Samsung never exposed in settings. If a mode is rejected, the panel simply ignores the
+write; nothing breaks.
 
 ## Requirements
-- Samsung Galaxy S20 series (S20 / S20+ / S20 Ultra — Exynos `x1s` family; Snapdragon
-  `y2s` should work the same) or any device exposing the same panel sysfs nodes.
-- A rooted ROM with **Magisk**.
-- An AOSP-based ROM. On One UI the stock service already manages rates.
+- Samsung Galaxy with a `panel_drv` sysfs interface (S20 / S20+ / S20 Ultra / Note 10+
+  family verified; other Samsung models work through runtime discovery).
+- Root with **Magisk**.
+- An AOSP-based ROM (One UI already manages rates natively).
 
 ## Install
 
 ### App
 ```bash
-adb install GalaxyHz_v1.1.apk
+adb install GalaxyHz_v2.0.apk
 ```
-Open the app once and grant the Magisk superuser prompt.
+First launch shows the setup wizard; grant the Magisk superuser prompt when it appears.
 
 ### Module
 Flash `force_120hz_x1s.zip` in the Magisk app (Modules → Install from storage), or:
@@ -63,29 +93,32 @@ Flash `force_120hz_x1s.zip` in the Magisk app (Modules → Install from storage)
 adb push force_120hz_x1s.zip /sdcard/Download/
 su -c "magisk --install-module /sdcard/Download/force_120hz_x1s.zip"
 ```
-Reboot. Check `/data/local/tmp/force_120hz_x1s.log` for the state dump.
+Reboot. The module re-applies the persisted mode at every boot, applies anti-flicker
+props early, and adds an **Action button** in the Magisk app for on-demand re-apply.
 
-## Switching rates from a terminal
-```bash
-# From the app: one tap. From a root shell:
-echo 96 > /data/adb/force_hz.conf    # 96, 60 or 120
-sh /data/adb/modules/force_120hz_x1s/action.sh
+**Module config** — `/data/adb/force_hz.conf`:
+```text
+120              # 120 Hz FHD+
+96               # 96 Hz FHD+
+60 1440x3200     # 60 Hz WQHD+
 ```
 
-## Build the app yourself
+## Building
 ```bash
 ./gradlew assembleDebug        # APK in app/build/outputs/apk/debug/
-./gradlew testDebugUnitTest    # unit tests (CI runs these too)
+./gradlew testDebugUnitTest    # unit tests (panel-table parser, CI runs these)
 ```
-Requires JDK 17+ and the Android SDK (API 36).
+Requires JDK 17+ and the Android SDK (API 36). CI (GitHub Actions) builds and tests
+every push.
 
 ## Troubleshooting
 | Symptom | Fix |
 |---|---|
-| Screen static / sparkle after a while | Apply *anti-flicker props*, then *Repair mode*; disable AOD |
-| Glitch bands mid-frame | *Reset DDI* (emergency panel reset); screen blinks once and clears |
-| Rate drops after unlock | Make sure the Magisk module is installed so props are set at boot |
-| 1440p after a ROM update | Tap any rate in the app — `wm size` is re-applied |
+| Screen static / sparkle after a while | Tools → *Lock refresh rate* (verified), disable AOD |
+| Glitch bands mid-frame | Tools → *Reset DDI*; screen blinks once and clears |
+| Rate drops after unlock | Install the Magisk module so props are set at boot |
+| 1440p after a ROM update | Home → tap any mode; `wm size` is re-applied |
+| Experimental mode does nothing | Your unit rejected the mode; pick another |
 
 ## License
 MIT — see [LICENSE](LICENSE).

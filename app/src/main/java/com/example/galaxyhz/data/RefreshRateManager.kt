@@ -8,84 +8,145 @@ import com.example.galaxyhz.util.RootHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** One of the three supported refresh-rate modes. */
-enum class HzMode(val hz: Int, val label: String, val description: String) {
-    H120(120, "120 Hz", "Ultra smooth - maximum fluidity"),
-    H96(96, "96 Hz", "Eco smooth - same fluid feel, less heat and battery drain"),
-    H60(60, "60 Hz", "Standard - maximum battery life");
+/** How the system picks the refresh rate. */
+enum class AdaptiveMode(val label: String, val description: String) {
+    FIXED("Fixed", "One rate, never changes - zero flicker, more battery drain"),
+    ADAPTIVE("Adaptive (stock)", "System lowers FPS for static content - may flicker on S20 OLED"),
+    ADAPTIVE_RANGE("Adaptive with custom range", "System adapts, but stays inside a min/max you choose");
+}
 
-    companion object {
-        @JvmStatic
-        fun fromHz(hz: Int): HzMode = when (hz) {
-            96 -> H96
-            120 -> H120
-            else -> H60
+/** One of the physical modes the panel driver exposes. */
+data class PanelMode(
+    val width: Int,
+    val height: Int,
+    val hz: Int,
+    val scanout: String,    // "HS" (high speed) or "NS" (normal speed)
+    val panelIndex: String, // index for the panel driver's display_mode node
+    val experimental: Boolean = false
+) {
+    val label: String get() = "${width}x${height} @ $hz Hz"
+    val subLabel: String
+        get() = when {
+            experimental -> "$scanout mode - experimental (set by panel driver)"
+            else -> "$scanout mode"
         }
-    }
+}
+
+data class ResolutionOption(val width: Int, val height: Int, val label: String) {
+    val key: String get() = "${width}x$height"
+}
+
+data class LockState(
+    val applied: Boolean,
+    val idleTimerZero: Boolean,
+    val contentDetectionOff: Boolean,
+    val minEqualsPeak: Boolean
+) {
+    val verified: Boolean get() = idleTimerZero && contentDetectionOff && minEqualsPeak
 }
 
 data class DisplayStatus(
     val currentFps: Float = 0f,
     val activeModeHz: Int = 60,
-    val targetMode: HzMode = HzMode.H60,
     val resolution: String = "?",
-    val panelMode: String = "unknown",
+    val panelModeLabel: String = "unknown",
     val minRefreshRate: String = "?",
     val peakRefreshRate: String = "?",
-    val antiFlickerActive: Boolean = false,
-    val adaptiveTileEnabled: Boolean = false,
+    val refreshRateLocked: Boolean = false,
+    val adaptiveMode: AdaptiveMode = AdaptiveMode.FIXED,
     val isAodEnabled: Boolean = false,
     val hasRoot: Boolean = false,
-    val deviceModel: String = ""
+    val deviceModel: String = "",
+    val deviceTitle: String = "",
+    val availableModes: List<PanelMode> = emptyList(),
+    val availableResolutions: List<ResolutionOption> = emptyList()
 )
 
 /**
- * Applies refresh-rate modes and display fixes on Samsung Galaxy S20-series
- * devices (x1s / SM-G981B verified) running AOSP-based ROMs such as Evolution X.
- *
- * Every mode change is written to four layers, matching what the previous
- * proven v3 workflow did from a root shell:
- *  1. `cmd display set-user-preferred-display-mode`  (DisplayManager switch)
- *  2. `settings put system/secure ...`               (framework refresh policy)
- *  3. `wm size`                                      (render resolution)
- *  4. `/sys/.../panel/display_mode`                  (direct panel driver mode)
+ * Display engine for GalaxyHz. All panel mode indices are discovered at runtime
+ * from the device's own mode table, so any Samsung `panel_drv` device works.
  */
 object RefreshRateManager {
 
-    private const val PANEL_BASE = "/sys/devices/platform/panel_drv@0/lcd/panel"
     private const val CONF_FILE = "/data/adb/force_hz.conf"
-    private const val WIDTH = 1080
-    private const val HEIGHT = 2400
+
+    // ------------------------------------------------------------ discovery
 
     /**
-     * Panel display-mode indices from the device's own mode table
-     * (`cat .../panel/display_mode`): pdm:1 = 1080x2400_120HS,
-     * pdm:2 = 1080x2400_96HS, pdm:3 = 1080x2400_60NS.
+     * Parses `cat <panel>/display_mode` lines like
+     * `pdm:1 1080x2400_120HS` (panel modes) and `cpdm:N ...` (compatible modes).
      */
-    private val panelModeIndex = mapOf(120 to "1", 96 to "2", 60 to "3")
-
-    // ---------------------------------------------------------------- mode
-
-    fun applyRefreshRateCommands(hz: Int): List<String> {
-        val rateFloat = when (hz) {
-            96 -> "96.00001"
-            60 -> "60.000004"
-            else -> "120.00001"
+    @JvmStatic
+    fun parsePanelTable(raw: String): List<PanelMode> {
+        val out = LinkedHashMap<String, PanelMode>()
+        Regex("(pdm|cpdm):(\\d+)\\s+(\\d+)x(\\d+)_(\\d+)(HS|NS)").findAll(raw).forEach { m ->
+            val isPrimary = m.groupValues[1] == "pdm"
+            val idx = m.groupValues[2]
+            val mode = PanelMode(
+                width = m.groupValues[3].toInt(),
+                height = m.groupValues[4].toInt(),
+                hz = m.groupValues[5].toInt(),
+                scanout = m.groupValues[6],
+                panelIndex = idx,
+                experimental = !isPrimary
+            )
+            val key = "${mode.width}x${mode.height}_${mode.hz}${mode.scanout}"
+            val prev = out[key]
+            // Prefer primary (pdm) entries over compatible (cpdm) ones.
+            if (prev == null || (prev.experimental && !mode.experimental)) out[key] = mode
         }
-        return listOf(
-            // Keep battery saver / adaptive throttling out of the way
+        return out.values
+            .sortedWith(compareByDescending<PanelMode> { it.hz }.thenByDescending { it.width })
+    }
+
+    suspend fun discoverPanelModes(profile: DeviceProfile): List<PanelMode> =
+        withContext(Dispatchers.IO) {
+            val raw = RootHelper.runCommand("cat ${profile.panelBase}/display_mode 2>/dev/null").stdout
+            val parsed = parsePanelTable(raw)
+            if (parsed.isNotEmpty()) parsed else profile.fallbackModes
+        }
+
+    fun resolutionsFrom(modes: List<PanelMode>, profile: DeviceProfile): List<ResolutionOption> {
+        val seen = LinkedHashMap<String, ResolutionOption>()
+        modes.sortedByDescending { it.width }.forEach { m ->
+            val key = "${m.width}x${m.height}"
+            if (!seen.containsKey(key)) {
+                seen[key] = ResolutionOption(
+                    m.width, m.height,
+                    if (m.height >= 3000) "WQHD+ ${m.width} x ${m.height}"
+                    else "FHD+ ${m.width} x ${m.height}"
+                )
+            }
+        }
+        profile.fallbackResolutions.forEach { r -> seen.putIfAbsent(r.key, r) }
+        return seen.values.toList()
+    }
+
+    // --------------------------------------------------------------- apply
+
+    /** Exact floats Android's DisplayManager matches against its mode table. */
+    private fun rateFloat(hz: Int): String = when (hz) {
+        120 -> "120.00001"
+        96 -> "96.00001"
+        60 -> "60.000004"
+        else -> "$hz.000004"
+    }
+
+    fun applyModeCommands(
+        profile: DeviceProfile,
+        width: Int,
+        height: Int,
+        hz: Int,
+        panelIndex: String?
+    ): List<String> {
+        val cmds = mutableListOf(
             "cmd power set-mode 0",
-            "cmd power set-fixed-performance-mode-enabled false",
             "settings put global low_power 0",
             "settings put global low_power_sticky 0",
             "settings put global adaptive_battery_management_enabled 0",
             "settings put global automatically_reduce_refresh_rate 0",
-
-            // Render resolution
-            "wm size ${WIDTH}x$HEIGHT",
-            "wm density 480",
-
-            // Framework refresh policy (system + secure + global tables)
+            "wm size ${width}x$height",
+            "wm density ${profile.defaultDensity}",
             "settings put system peak_refresh_rate $hz.0",
             "settings put system min_refresh_rate $hz.0",
             "settings put system user_refresh_rate $hz",
@@ -94,78 +155,157 @@ object RefreshRateManager {
             "settings put system default_refresh_rate $hz.0",
             "settings put system motion_smoothness 2",
             "settings put secure refresh_rate_mode 2",
-            "settings put secure screen_resolution_mode 1",
+            "settings put secure screen_resolution_mode ${if (height >= 3000) "0" else "1"}",
             "settings put global match_content_frame_rate 2",
-
-            // DisplayManager: switching across groups + preferred physical mode
             "cmd display set-match-content-frame-rate-pref 2",
-            "cmd display set-user-preferred-display-mode $WIDTH $HEIGHT $rateFloat 0 false",
+            "cmd display set-user-preferred-display-mode $width $height ${rateFloat(hz)} 0 false"
+        )
+        if (!panelIndex.isNullOrBlank()) {
+            cmds += "echo $panelIndex > ${profile.panelBase}/display_mode 2>/dev/null"
+        }
+        cmds += "echo $hz > $CONF_FILE"
+        return cmds
+    }
 
-            // Direct panel driver write (ignored gracefully where unavailable)
-            "echo ${panelModeIndex[hz] ?: "1"} > $PANEL_BASE/display_mode 2>/dev/null",
+    suspend fun applyMode(
+        profile: DeviceProfile,
+        width: Int,
+        height: Int,
+        hz: Int,
+        panelIndex: String?
+    ): RootHelper.CommandResult = withContext(Dispatchers.IO) {
+        RootHelper.runCommands(applyModeCommands(profile, width, height, hz, panelIndex), 20_000)
+    }
 
-            // Persist for the Magisk module's boot service
-            "echo $hz > $CONF_FILE"
+    /**
+     * Experimental rate above the standard set: written straight to the panel
+     * driver (its mode table defines safe HS clocks) plus settings as a hint.
+     */
+    suspend fun applyExperimentalRate(profile: DeviceProfile, mode: PanelMode): RootHelper.CommandResult =
+        withContext(Dispatchers.IO) {
+            val result = applyMode(profile, mode.width, mode.height, mode.hz, mode.panelIndex)
+            // Verify the panel actually took the mode.
+            val readBack = RootHelper.runCommand("cat ${profile.panelBase}/display_mode 2>/dev/null").stdout
+            val tookIt = readBack.contains("panel_mode:${mode.panelIndex}")
+            if (!tookIt && result.isSuccess) {
+                result.copy(stderr = "Panel did not confirm mode ${mode.label} (may be rejected on this unit)")
+            } else result
+        }
+
+    // -------------------------------------------------- adaptive / locking
+
+    fun adaptiveCommands(profile: DeviceProfile, mode: AdaptiveMode, min: Int, max: Int): List<String> =
+        when (mode) {
+            AdaptiveMode.FIXED -> listOf(
+                "resetprop -n ro.surface_flinger.use_content_detection_for_refresh_rate false",
+                "resetprop -n ro.surface_flinger.set_idle_timer_ms 0",
+                "resetprop -n ro.surface_flinger.set_touch_timer_ms 0",
+                "resetprop -n ro.surface_flinger.set_display_power_timer_ms 0",
+                "settings put global automatically_reduce_refresh_rate 0",
+                "cmd display set-match-content-frame-rate-pref 0"
+            )
+            AdaptiveMode.ADAPTIVE -> listOf(
+                "resetprop -n ro.surface_flinger.use_content_detection_for_refresh_rate true",
+                "resetprop -n ro.surface_flinger.set_idle_timer_ms -1",
+                "resetprop -n ro.surface_flinger.set_touch_timer_ms -1",
+                "settings put system peak_refresh_rate $max.0",
+                "settings put system min_refresh_rate ${if (max >= 120) 60 else max}.0",
+                "settings put global automatically_reduce_refresh_rate 1",
+                "cmd display set-match-content-frame-rate-pref 1"
+            )
+            AdaptiveMode.ADAPTIVE_RANGE -> listOf(
+                "resetprop -n ro.surface_flinger.use_content_detection_for_refresh_rate true",
+                "resetprop -n ro.surface_flinger.set_idle_timer_ms -1",
+                "resetprop -n ro.surface_flinger.set_touch_timer_ms -1",
+                "settings put system peak_refresh_rate $max.0",
+                "settings put system min_refresh_rate $min.0",
+                "cmd display set-match-content-frame-rate-pref 1"
+            )
+        } + "export PATH=/data/adb/magisk:\$PATH:/system/bin"
+
+    suspend fun applyAdaptiveMode(
+        profile: DeviceProfile,
+        mode: AdaptiveMode,
+        min: Int = 60,
+        max: Int = 120
+    ): RootHelper.CommandResult = withContext(Dispatchers.IO) {
+        RootHelper.runCommands(adaptiveCommands(profile, mode, min, max))
+    }
+
+    /** Applies the anti-flicker props AND verifies them, fixing the old silent failure. */
+    suspend fun lockRefreshRate(profile: DeviceProfile): LockState = withContext(Dispatchers.IO) {
+        RootHelper.runCommands(
+            listOf("export PATH=/data/adb/magisk:\$PATH:/system/bin") + adaptiveCommands(
+                profile, AdaptiveMode.FIXED, 60, 120
+            )
+        )
+        val idle = RootHelper.runCommand("getprop ro.surface_flinger.set_idle_timer_ms").stdout.trim()
+        val content = RootHelper.runCommand(
+            "getprop ro.surface_flinger.use_content_detection_for_refresh_rate"
+        ).stdout.trim()
+        val min = RootHelper.runCommand("settings get system min_refresh_rate").stdout.trim()
+        val peak = RootHelper.runCommand("settings get system peak_refresh_rate").stdout.trim()
+        LockState(
+            applied = true,
+            idleTimerZero = idle == "0",
+            contentDetectionOff = content.equals("false", true) || content == "0",
+            minEqualsPeak = min == peak && min.isNotBlank()
         )
     }
 
-    suspend fun applyRefreshRate(hz: Int): RootHelper.CommandResult = withContext(Dispatchers.IO) {
-        RootHelper.runCommands(applyRefreshRateCommands(hz), timeoutMs = 20_000)
+    // ---------------------------------------------------------- resolution
+
+    suspend fun applyResolution(
+        profile: DeviceProfile,
+        width: Int,
+        height: Int,
+        currentHz: Int,
+        currentPanelIndex: String?
+    ): RootHelper.CommandResult = withContext(Dispatchers.IO) {
+        val rate = rateFloat(currentHz)
+        RootHelper.runCommands(
+            listOf(
+                "wm size ${width}x$height",
+                "wm density ${profile.defaultDensity}",
+                "settings put secure screen_resolution_mode ${if (height >= 3000) "0" else "1"}",
+                "cmd display set-user-preferred-display-mode $width $height $rate 0 false",
+                "echo $currentHz > $CONF_FILE"
+            ),
+            timeoutMs = 15_000
+        )
     }
 
-    // ---------------------------------------------------------- anti-flicker
-
-    /** Properties that stop SurfaceFlinger from dropping to 60Hz on idle (flicker source #1). */
-    fun antiFlickerPropCommands(): List<String> = listOf(
-        "resetprop -n ro.surface_flinger.use_content_detection_for_refresh_rate false",
-        "resetprop -n ro.surface_flinger.set_idle_timer_ms 0",
-        "resetprop -n ro.surface_flinger.set_touch_timer_ms 0",
-        "resetprop -n ro.surface_flinger.set_display_power_timer_ms 0",
-        "resetprop -n debug.sf.frame_rate_multiple_threshold 120",
-        "resetprop -n debug.sf.disable_client_composition_cache 1"
-    )
-
-    suspend fun applyAntiFlickerFix(): RootHelper.CommandResult = withContext(Dispatchers.IO) {
-        // resetprop needs the Magisk binary directory on PATH inside su shells.
-        val commands = listOf("export PATH=/data/adb/magisk:\$PATH:/system/bin") + antiFlickerPropCommands()
-        RootHelper.runCommands(commands)
-    }
-
-    // ------------------------------------------------------------------ AOD
+    // ---------------------------------------------------------- AOD / panel
 
     suspend fun toggleAlwaysOnDisplay(enable: Boolean): RootHelper.CommandResult =
         withContext(Dispatchers.IO) {
-            val commands = buildList {
-                add("settings put secure doze_always_on ${if (enable) "1" else "0"}")
-                if (enable) {
-                    // AOD renders at 60Hz/NS: raise its refresh cap so it never
-                    // drags the panel out of the HS clock region.
-                    add("settings put secure doze_always_on_refresh_rate 60.0")
-                }
-            }
-            RootHelper.runCommands(commands)
+            RootHelper.runCommands(listOf("settings put secure doze_always_on ${if (enable) "1" else "0"}"))
         }
 
-    // ------------------------------------------------------- panel recovery
+    suspend fun resetDisplayPanel(profile: DeviceProfile): RootHelper.CommandResult =
+        withContext(Dispatchers.IO) {
+            RootHelper.runCommands(
+                listOf(
+                    "echo 0 > ${profile.panelBase}/lcd_power 2>/dev/null",
+                    "sleep 0.3",
+                    "echo 1 > ${profile.panelBase}/lcd_power 2>/dev/null"
+                ),
+                timeoutMs = 6_000
+            )
+        }
 
-    /** Power-cycles the panel DDIC - clears mid-frame clock desync artifacts. */
-    suspend fun resetDisplayPanel(): RootHelper.CommandResult = withContext(Dispatchers.IO) {
-        RootHelper.runCommands(
-            listOf(
-                "echo 0 > $PANEL_BASE/lcd_power 2>/dev/null",
-                "sleep 0.3",
-                "echo 1 > $PANEL_BASE/lcd_power 2>/dev/null"
-            ),
-            timeoutMs = 6_000
-        )
+    // --------------------------------------------------------------- status
+
+    private fun panelLabelFromReadout(raw: String, modes: List<PanelMode>): String {
+        val idx = Regex("panel_mode:(\\d+)").find(raw)?.groupValues?.get(1)
+        modes.firstOrNull { it.panelIndex == idx }?.let { return "${it.width}x${it.height} @ ${it.hz} Hz" }
+        return if (raw.isNotBlank()) raw.trim() else "unknown"
     }
 
-    // ---------------------------------------------------------- status read
-
     suspend fun getStatus(context: Context): DisplayStatus = withContext(Dispatchers.IO) {
+        val profile = DeviceProfiles.detect()
         val hasRoot = RootHelper.isRootAvailable()
 
-        // Framework-visible refresh rate and resolution work without root.
         var currentFps = 0f
         var resolution = "?"
         try {
@@ -182,9 +322,9 @@ object RefreshRateManager {
 
         var minRate = "?"
         var peakRate = "?"
-        var panelMode = "unknown"
+        var panelLabel = "unknown"
         var isAod = false
-        var isAntiFlicker = false
+        var modes = profile.fallbackModes
 
         if (hasRoot) {
             RootHelper.runCommand("settings get system min_refresh_rate").stdout
@@ -192,21 +332,11 @@ object RefreshRateManager {
             RootHelper.runCommand("settings get system peak_refresh_rate").stdout
                 .takeIf { it.isNotBlank() && it != "null" }?.let { peakRate = it }
 
-            // Panel driver reports its active mode as "panel_mode:<index>"; map it to Hz.
-            val pdm = RootHelper.runCommand("cat $PANEL_BASE/display_mode 2>/dev/null").stdout
-            val idx = Regex("panel_mode:(\\d+)").find(pdm)?.groupValues?.get(1)
-            panelMode = when (idx) {
-                "1" -> "1080x2400_120HS"
-                "2" -> "1080x2400_96HS"
-                "3" -> "1080x2400_60NS"
-                "0" -> "1440x3200_60NS"
-                else -> if (pdm.isNotBlank()) pdm else "unknown"
-            }
+            val pdm = RootHelper.runCommand("cat ${profile.panelBase}/display_mode 2>/dev/null").stdout
+            modes = discoverPanelModes(profile)
+            panelLabel = panelLabelFromReadout(pdm, modes)
 
             isAod = RootHelper.runCommand("settings get secure doze_always_on").stdout.trim() == "1"
-            isAntiFlicker = RootHelper.runCommand(
-                "getprop ro.surface_flinger.set_idle_timer_ms"
-            ).stdout.trim() == "0"
         }
 
         val activeHz = when {
@@ -216,19 +346,28 @@ object RefreshRateManager {
             currentFps >= 90f -> 96
             else -> 60
         }
+        val adaptive: AdaptiveMode = when {
+            minRate.isNotBlank() && peakRate.isNotBlank() && minRate == peakRate -> AdaptiveMode.FIXED
+            minRate != "?" && peakRate != "?" && minRate.toFloatOrNull() != peakRate.toFloatOrNull() ->
+                AdaptiveMode.ADAPTIVE_RANGE
+            else -> AdaptiveMode.FIXED
+        }
 
         DisplayStatus(
             currentFps = currentFps,
             activeModeHz = activeHz,
-            targetMode = HzMode.fromHz(activeHz),
             resolution = resolution,
-            panelMode = panelMode,
+            panelModeLabel = panelLabel,
             minRefreshRate = minRate,
             peakRefreshRate = peakRate,
-            antiFlickerActive = isAntiFlicker,
+            refreshRateLocked = adaptive == AdaptiveMode.FIXED,
+            adaptiveMode = adaptive,
             isAodEnabled = isAod,
             hasRoot = hasRoot,
-            deviceModel = Build.MODEL
+            deviceModel = Build.MODEL,
+            deviceTitle = DeviceProfiles.familyTitle(profile),
+            availableModes = modes,
+            availableResolutions = resolutionsFrom(modes, profile)
         )
     }
 }

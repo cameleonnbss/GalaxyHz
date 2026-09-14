@@ -1,50 +1,51 @@
 package com.example.galaxyhz.theme
 
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 
-private val DarkColorScheme = darkColorScheme(primary = Purple80, secondary = PurpleGrey80, tertiary = Pink80)
+private val GalaxyHzColors = darkColorScheme(
+    primary = NeonCyan,
+    onPrimary = Color.Black,
+    secondary = NeonEmerald,
+    onSecondary = Color.Black,
+    tertiary = NeonViolet,
+    error = ErrorRed,
+    background = Bg0,
+    onBackground = Color.White,
+    surface = Bg1,
+    onSurface = Color.White,
+    surfaceVariant = Bg2,
+    onSurfaceVariant = Color(0xFFB9C2D8),
+    surfaceContainer = Bg2,
+    surfaceContainerHigh = Bg3,
+    surfaceContainerHighest = Bg3,
+    surfaceContainerLow = Bg1,
+    surfaceContainerLowest = Bg0,
+    outline = Line,
+    outlineVariant = Line
+)
 
-private val LightColorScheme =
-  lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40,
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+object ExpressiveShapes {
+    val card = RoundedCornerShape(24.dp)
+    val cardBig = RoundedCornerShape(32.dp)
+    val chip = RoundedCornerShape(16.dp)
+    val pill = RoundedCornerShape(100)
+}
 
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
-  )
-
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun GalaxyHzTheme(
-  darkTheme: Boolean = isSystemInDarkTheme(),
-  // Dynamic color is available on Android 12+
-  dynamicColor: Boolean = true,
-  content: @Composable () -> Unit,
-) {
-  val colorScheme =
-    when {
-      dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-        val context = LocalContext.current
-        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-      }
-      darkTheme -> DarkColorScheme
-      else -> LightColorScheme
-    }
-
-  MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+fun GalaxyHzTheme(content: @Composable () -> Unit) {
+    // Real Material 3 Expressive: physics-based spring motion for every component.
+    MaterialTheme(
+        colorScheme = GalaxyHzColors,
+        motionScheme = MotionScheme.expressive(),
+        content = content
+    )
 }

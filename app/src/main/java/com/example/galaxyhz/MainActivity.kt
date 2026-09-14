@@ -9,23 +9,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.example.galaxyhz.theme.GalaxyHzTheme
-
-import com.example.galaxyhz.ui.main.MainScreen
+import com.example.galaxyhz.ui.AppRoot
 
 class MainActivity : ComponentActivity() {
-  override fun onCreate(savedInstanceState: Bundle?) {
-    super.onCreate(savedInstanceState)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
 
-    enableEdgeToEdge()
-    setContent {
-      GalaxyHzTheme {
-        Surface(
-          modifier = Modifier.fillMaxSize(),
-          color = MaterialTheme.colorScheme.background
-        ) {
-          MainScreen(modifier = Modifier.fillMaxSize())
+        enableEdgeToEdge()
+        setContent {
+            GalaxyHzTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    AppRoot()
+                }
+            }
         }
-      }
     }
-  }
 }
