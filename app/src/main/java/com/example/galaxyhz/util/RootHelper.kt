@@ -105,6 +105,28 @@ object RootHelper {
     suspend fun runCommands(commands: List<String>, timeoutMs: Long = 12_000): CommandResult =
         runCommand(commands.joinToString("\n"), timeoutMs)
 
+    /**
+     * Runs commands with retries: when other apps hammer Magisk's su daemon,
+     * requests can transiently fail (crashed su worker). One retry after a
+     * short backoff recovers most of those without the caller noticing.
+     */
+    suspend fun runCommandsRetried(
+        commands: List<String>,
+        timeoutMs: Long = 12_000,
+        attempts: Int = 3
+    ): CommandResult {
+        var last = runCommands(commands, timeoutMs)
+        var delayMs = 400L
+        var attempt = 1
+        while (!last.isSuccess && attempt < attempts) {
+            kotlinx.coroutines.delay(delayMs)
+            delayMs *= 2
+            last = runCommands(commands, timeoutMs)
+            attempt++
+        }
+        return last
+    }
+
     private fun drain(reader: BufferedReader, into: StringBuilder) {
         var line: String?
         while (reader.readLine().also { line = it } != null) {

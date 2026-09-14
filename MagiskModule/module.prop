@@ -1,0 +1,6 @@
+id=force_120hz_x1s
+name=GalaxyHz - Force 120/96/60Hz (S20 x1s)
+version=v4.1
+versionCode=41
+author=cameleonnbss
+description=Forces 120Hz, 96Hz, 60Hz (or hidden panel HS modes) on Samsung Galaxy S20 series (x1s) and other Samsung panel_drv devices on AOSP ROMs such as Evolution X. Resolves panel modes at runtime from the device mode table, supports FHD+/WQHD+ resolution switching with auto-scaled density, disables SurfaceFlinger idle timers (anti-flicker) and ships a Magisk Action button. Config: /data/adb/force_hz.conf (e.g. "120", "96", "60 1440x3200", "120 dpi 560").

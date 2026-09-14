@@ -77,6 +77,19 @@ fun HomeScreen(viewModel: GalaxyHzViewModel) {
         }
     }
 
+    if (status.conflictApp.isNotBlank()) {
+        Spacer(Modifier.height(8.dp))
+        TitledCard("CONFLICT") {
+            Text(
+                "${status.conflictApp} is running and also requests root. Two tuner " +
+                    "apps fighting over the display makes both unreliable - uninstall " +
+                    "or freeze one of them.",
+                color = com.example.galaxyhz.theme.WarnOrange,
+                fontSize = 13.sp
+            )
+        }
+    }
+
     Spacer(Modifier.height(16.dp))
     SectionHeader("REFRESH RATE")
     Spacer(Modifier.height(8.dp))

@@ -61,6 +61,7 @@ data class DisplayStatus(
     val hasRoot: Boolean = false,
     val deviceModel: String = "",
     val deviceTitle: String = "",
+    val conflictApp: String = "",
     val availableModes: List<PanelMode> = emptyList(),
     val availableResolutions: List<ResolutionOption> = emptyList()
 )
@@ -184,9 +185,20 @@ object RefreshRateManager {
         panelIndex: String?,
         density: Int? = null
     ): RootHelper.CommandResult = withContext(Dispatchers.IO) {
-        RootHelper.runCommands(
+        val res = RootHelper.runCommandsRetried(
             applyModeCommands(profile, width, height, hz, panelIndex, density), 20_000
         )
+        // Verify: let the framework settle, then compare the actual rate.
+        kotlinx.coroutines.delay(2_000)
+        val actual = actualRenderRate()
+        if (res.isSuccess && actual in (hz - 2)..(hz + 2)) res
+        else if (res.isSuccess) res.copy(
+            isSuccess = false,
+            stderr = "Applied, but the panel is rendering at $actual Hz instead of $hz. " +
+                "Another tuner app may be fighting for control, or lock/unlock the " +
+                "screen once to settle the panel."
+        )
+        else res
     }
 
     /**
@@ -326,11 +338,26 @@ object RefreshRateManager {
 
     suspend fun setShowRefreshRateOverlay(enable: Boolean): RootHelper.CommandResult =
         withContext(Dispatchers.IO) {
-            RootHelper.runCommands(
+            // NOTE: `cmd surfaceflinger` does not exist on modern Android builds.
+            // The settings key is the persistent switch; the SurfaceFlinger
+            // transaction (1035) applies it immediately without a restart.
+            val res = RootHelper.runCommands(
                 listOf(
                     "settings put global show_refresh_rate_overlay ${if (enable) "1" else "0"}",
-                    "cmd surfaceflinger set_debug_sf ${if (enable) "1" else "0"}"
+                    "service call SurfaceFlinger 1035 i32 ${if (enable) "1" else "0"}"
                 )
+            )
+            val readBack = RootHelper.runCommand(
+                "settings get global show_refresh_rate_overlay"
+            ).stdout.trim()
+            if (readBack == if (enable) "1" else "0") {
+                if (enable) res.copy(
+                    stdout = "Overlay enabled. If nothing appears, reboot once - " +
+                        "some ROM builds draw it only after a restart."
+                ) else res
+            } else res.copy(
+                isSuccess = false,
+                stderr = "Overlay setting did not stick (read back: '$readBack')"
             )
         }
 
@@ -390,30 +417,53 @@ object RefreshRateManager {
         var modes = profile.fallbackModes
 
         if (hasRoot) {
-            RootHelper.runCommand("settings get system min_refresh_rate").stdout
-                .takeIf { it.isNotBlank() && it != "null" }?.let { minRate = it }
-            RootHelper.runCommand("settings get system peak_refresh_rate").stdout
-                .takeIf { it.isNotBlank() && it != "null" }?.let { peakRate = it }
+            // ONE root session for every value: spawning one su per query
+            // saturates Magisk's daemon and makes root flaky for the whole
+            // system. Batched with markers and parsed below.
+            val batch = RootHelper.runCommands(
+                listOf(
+                    "echo MIN=\$(settings get system min_refresh_rate)",
+                    "echo PEAK=\$(settings get system peak_refresh_rate)",
+                    "echo RATE=\$(dumpsys SurfaceFlinger | grep -m1 renderRate)",
+                    "echo PDM=\$(cat ${profile.panelBase}/display_mode 2>/dev/null)",
+                    "echo AOD=\$(settings get secure doze_always_on)",
+                    "echo SHOWHZ=\$(settings get global show_refresh_rate_overlay)",
+                    "echo DENS=\$(wm density)"
+                ),
+                timeoutMs = 20_000
+            ).stdout
 
-            // Root fallback for FPS: SurfaceFlinger's actual render rate.
-            val sf = RootHelper.runCommand("dumpsys SurfaceFlinger").stdout
-            Regex("renderRate=([0-9.]+)").find(sf)?.groupValues?.get(1)?.toFloatOrNull()?.let {
-                if (it > 0 && currentFps <= 0f) {
-                    currentFps = it
-                    fpsSource = "surfaceflinger"
+            fun field(key: String): String =
+                Regex("(?m)^$key=(.*)$").find(batch)?.groupValues?.get(1)?.trim() ?: ""
+
+            field("MIN").takeIf { it.isNotBlank() && it != "null" }?.let { minRate = it }
+            field("PEAK").takeIf { it.isNotBlank() && it != "null" }?.let { peakRate = it }
+            Regex("renderRate=([0-9.]+)").find(field("RATE"))?.groupValues?.get(1)
+                ?.toFloatOrNull()?.let {
+                    if (it > 0 && currentFps <= 0f) {
+                        currentFps = it
+                        fpsSource = "surfaceflinger"
+                    }
                 }
-            }
-
-            val pdm = RootHelper.runCommand("cat ${profile.panelBase}/display_mode 2>/dev/null").stdout
+            val pdm = field("PDM")
             modes = discoverPanelModes(profile)
             panelLabel = panelLabelFromReadout(pdm, modes)
+            isAod = field("AOD") == "1"
+            showHz = field("SHOWHZ") == "1"
+            density = Regex("\\d+").find(field("DENS"))
+                ?.value?.toIntOrNull() ?: 0
+        }
 
-            isAod = RootHelper.runCommand("settings get secure doze_always_on").stdout.trim() == "1"
-            showHz = RootHelper.runCommand(
-                "settings get global show_refresh_rate_overlay"
-            ).stdout.trim() == "1"
-            density = RootHelper.runCommand("wm density").stdout
-                .let { Regex("(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0 }
+        // Detect a competing tuner app: another package requesting su while we
+        // run explains "applied but the panel snaps back" reports.
+        var conflict = ""
+        if (hasRoot) {
+            val suList = RootHelper.runCommand(
+                "ps -A 2>/dev/null | grep -E 'su|magisk' | grep -v grep | head -5"
+            ).stdout
+            if (suList.contains("s20tuner") || suList.contains("tuner")) {
+                conflict = "S20 Tuner"
+            }
         }
 
         val activeHz = when {
@@ -446,6 +496,7 @@ object RefreshRateManager {
             hasRoot = hasRoot,
             deviceModel = Build.MODEL,
             deviceTitle = DeviceProfiles.familyTitle(profile),
+            conflictApp = conflict,
             availableModes = modes,
             availableResolutions = resolutionsFrom(modes, profile)
         )

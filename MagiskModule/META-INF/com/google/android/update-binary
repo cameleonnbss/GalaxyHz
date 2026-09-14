@@ -1,0 +1,31 @@
+#!/sbin/sh
+#################
+# Magisk Module Updater Script
+#################
+
+# Default permissions
+umask 022
+
+# OUTFD
+OUTFD=$2
+ZIPFILE=$3
+
+# Set up environment
+[ -z "$TMPDIR" ] && TMPDIR=/dev/tmp
+mkdir -p "$TMPDIR"
+
+# Extract customize.sh
+unzip -o "$ZIPFILE" 'customize.sh' -d "$TMPDIR" >&2
+unzip -o "$ZIPFILE" 'module.prop' -d "$TMPDIR" >&2
+
+# Load util_functions.sh
+if [ -f /data/adb/magisk/util_functions.sh ]; then
+  . /data/adb/magisk/util_functions.sh
+else
+  echo "! Magisk is not installed" >&2
+  exit 1
+fi
+
+# Run install
+install_module
+exit 0

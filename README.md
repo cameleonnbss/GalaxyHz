@@ -100,6 +100,24 @@ write; nothing breaks.
 - Root with **Magisk**.
 - An AOSP-based ROM (One UI already manages rates natively).
 
+## Files in this repo
+
+| Path | What |
+|---|---|
+| `apk/GalaxyHz_v2.3.apk` | Latest APK, directly downloadable without going through the Releases page |
+| `MagiskModule/` | The Magisk module **unzipped and browsable** — read every script, or zip the folder to rebuild `force_120hz_x1s.zip` |
+| `app/` | App source (Kotlin + Compose) |
+
+## If the screen flickers after changing the rate
+
+**Lock and unlock the phone once** (power button off → on). The panel re-initializes
+and the sparkle/static/bands clear. This is a panel-level quirk of HS↔NS clock
+transitions on S20 OLEDs, not a bug in the app or module — the module's DDI reset
+button (app: Tools → Reset display panel) does the same thing in software.
+
+> Also make sure only **one** tuner app controls the display: two root apps fighting
+> over refresh rates (e.g. GalaxyHz + another "S20 Tuner" app) makes both unreliable.
+
 ## Install
 
 ### App

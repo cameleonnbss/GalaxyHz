@@ -70,11 +70,26 @@ class GalaxyHzViewModel(app: Application) : AndroidViewModel(app) {
 
     fun finishSetup() { prefs.setupDone = true; _setupDone.value = true }
 
+    /**
+     * Polls live status. Rate: 2.5 s while the UI is visible, slowing to 15 s
+     * in background - a root query every 2.5 s forever starves Magisk's su
+     * daemon and makes root flaky for the whole system.
+     */
+    private var pollingPaused = false
+
+    fun pausePolling() { pollingPaused = true }
+    fun resumePolling() { pollingPaused = false }
+
     init {
         viewModelScope.launch {
             while (true) {
-                refresh()
-                delay(2500)
+                if (!pollingPaused) {
+                    refresh()
+                    delay(2_500)
+                } else {
+                    refresh()
+                    delay(15_000)
+                }
             }
         }
     }
