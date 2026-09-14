@@ -11,6 +11,20 @@ hardcoding one phone. Verified live on a Galaxy S20 (SM-G981B, `x1s`) on
 Evolution X / Android 16: SurfaceFlinger reports `renderRate=120.00 Hz` with the panel
 locked in the HS clock region — no more mid-frame desync, sparkle or static.
 
+## Quick download (no release page needed)
+
+- **App:** [`apk/GalaxyHz_v2.3.apk`](apk/GalaxyHz_v2.3.apk) — install directly
+- **Magisk module:** [`MagiskModule/`](MagiskModule/) — the module **unzipped and
+  browsable**: read every script on GitHub (`module.prop`, `service.sh`,
+  `common/force_120hz.sh`…), or download the ready-to-flash
+  [`force_120hz_x1s.zip`](https://github.com/cameleonnbss/GalaxyHz/releases/download/v2.3/force_120hz_x1s.zip).
+  To rebuild the zip yourself: zip the *contents* of `MagiskModule/`
+  (`module.prop` must sit at the zip root).
+
+> 💡 If the screen shows sparkle/static after a rate change: **sleep and wake the
+> phone once** — the panel re-initializes and it clears. Details in
+> [Troubleshooting](#troubleshooting).
+
 ## Screens
 
 | | |
