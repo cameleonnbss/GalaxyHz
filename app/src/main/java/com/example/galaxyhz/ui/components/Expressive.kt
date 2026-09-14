@@ -19,6 +19,9 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -195,6 +198,40 @@ fun InfoNote(text: String, color: Color = MaterialTheme.colorScheme.onSurfaceVar
     Text(text, fontSize = 12.sp, color = color)
 }
 
+/**
+ * M3 Expressive single-choice segmented button row - the signature control
+ * for switching between the main rates.
+ */
+@Composable
+fun HzSegmentedRow(
+    options: List<Int>,
+    selected: Int,
+    enabled: Boolean = true,
+    onSelect: (Int) -> Unit
+) {
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        options.forEachIndexed { index, hz ->
+            SegmentedButton(
+                selected = selected == hz,
+                onClick = { onSelect(hz) },
+                enabled = enabled,
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                colors = SegmentedButtonDefaults.colors(
+                    activeContainerColor = MaterialTheme.colorScheme.primary,
+                    activeContentColor = MaterialTheme.colorScheme.onPrimary
+                ),
+                label = {
+                    Text(
+                        "$hz",
+                        fontWeight = if (selected == hz) FontWeight.Black else FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+            )
+        }
+    }
+}
+
 @Composable
 fun TitledCard(title: String, content: @Composable () -> Unit) {
     Card(
@@ -212,6 +249,37 @@ fun TitledCard(title: String, content: @Composable () -> Unit) {
             )
             Spacer(Modifier.height(10.dp))
             content()
+        }
+    }
+}
+
+/** Lock-rate card with a live verified/not-verified status line. */
+@Composable
+fun LockCard(
+    locked: Boolean,
+    busy: Boolean,
+    hasRoot: Boolean,
+    lang: String,
+    onLock: () -> Unit
+) {
+    TitledCard("ANTI-FLICKER LOCK") {
+        Text(
+            if (locked) "Rate is locked (no idle/content downclocking)"
+            else "Rate may drop when content is static (flicker risk)",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(10.dp))
+        androidx.compose.material3.Button(
+            onClick = onLock,
+            enabled = !busy && hasRoot,
+            shape = ExpressiveShapes.pill,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+        Text(
+            com.example.galaxyhz.ui.L10n.t("lock_rate", lang),
+            fontWeight = FontWeight.Bold
+        )
         }
     }
 }

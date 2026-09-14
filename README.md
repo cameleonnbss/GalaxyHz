@@ -19,8 +19,13 @@ locked in the HS clock region — no more mid-frame desync, sparkle or static.
 | **Custom rate** — 24–240 Hz slider (frame-paced) | **Adaptive** — fixed / stock / custom range |
 | **Experimental** — hidden HS panel modes | **Tools** — verified lock, AOD, DDI reset |
 
-A modal navigation drawer (hamburger menu) holds everything, and a
-**Quick Settings tile** cycles 120 → 96 → 60 Hz without opening the app.
+A modal navigation drawer (hamburger menu) holds everything, plus a
+**Quick Settings tile** that cycles 120 → 96 → 60 Hz and a **home-screen widget**
+with direct 60 / 96 / 120 buttons and a big live rate readout that cycles on tap.
+The launcher ships a custom adaptive icon (speedometer + Hz bolt).
+
+The live FPS readout never sits at 0: it comes from DisplayManager, and when that
+returns nothing the app falls back to SurfaceFlinger's real render rate over root.
 
 ## Features
 
@@ -38,7 +43,9 @@ A modal navigation drawer (hamburger menu) holds everything, and a
 - **Hidden / experimental modes** — panels ship with intermediate HS clocks Samsung
   never exposed (S20: 100/104/110/112 Hz). The app lists what *your* driver reports
   and writes them directly, then reads back whether the panel took the mode.
-- **Resolution switching** — FHD+ ↔ WQHD+ on panels that support both.
+- **Resolution switching** — FHD+ ↔ WQHD+ on panels that support both, with
+  **auto-scaled density** so the UI keeps the same physical size — plus a manual
+  density stepper (±10 dpi and one-tap Auto) in the Resolution screen.
 
 ### Adaptive behavior
 - **Fixed** — kills SurfaceFlinger idle/content detection: the anti-flicker default.
@@ -59,7 +66,12 @@ A modal navigation drawer (hamburger menu) holds everything, and a
 ### Setup & polish
 - **First-run setup wizard** — explains what the app does, offers a direct shortcut to
   Magisk for the superuser prompt, and can be skipped for non-root status reading.
-- **Language setting** — English base with French translation built in.
+- **Language setting** — English base with French built in; switching applies
+  **instantly**, no app restart.
+- **Developer overlay toggle** — the same "show refresh rate" overlay as
+  Developer options, switchable from the app to verify modes really stick.
+- **Module zip export** — copies the installed Magisk module's zip to `Download`
+  so you can inspect or re-flash it from any file manager.
 - **Real Material 3 Expressive** — `material3 1.5.0-alpha` with
   `ExperimentalMaterial3ExpressiveApi`: `MotionScheme.expressive()` spring physics,
   `LoadingIndicator`, expressive shapes, drawer-based navigation.
@@ -83,7 +95,7 @@ write; nothing breaks.
 
 ### App
 ```bash
-adb install GalaxyHz_v2.0.apk
+adb install GalaxyHz_v2.1.apk
 ```
 First launch shows the setup wizard; grant the Magisk superuser prompt when it appears.
 
@@ -101,6 +113,7 @@ props early, and adds an **Action button** in the Magisk app for on-demand re-ap
 120              # 120 Hz FHD+
 96               # 96 Hz FHD+
 60 1440x3200     # 60 Hz WQHD+
+120 dpi 560      # manual density override (otherwise auto-scaled per resolution)
 ```
 
 ## Building

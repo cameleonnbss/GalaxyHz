@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">GalaxyHz</string>
     <string name="tile_label">Refresh Rate</string>
+    <string name="widget_label">GalaxyHz Rate</string>
 </resources>

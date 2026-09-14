@@ -94,13 +94,13 @@ fun AppRoot(viewModel: GalaxyHzViewModel = viewModel()) {
     val busy by viewModel.busy.collectAsState()
     val setupDone by viewModel.setupDone.collectAsState()
     val dest by viewModel.selectedDest.collectAsState()
-    val lang = viewModel.language
+    val lang by viewModel.lang.collectAsState()
 
     if (!setupDone) {
         SetupScreen(
             hasRoot = status.hasRoot,
             lang = lang,
-            onOpenMagisk = { viewModel.openMagiskThread() },
+            onOpenMagisk = { viewModel.openMagisk() },
             onContinue = { viewModel.finishSetup() }
         )
         return

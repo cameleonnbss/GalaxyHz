@@ -2,7 +2,7 @@ package com.example.galaxyhz.ui.screens
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,13 +24,14 @@ import com.example.galaxyhz.ui.L10n
 import com.example.galaxyhz.ui.GalaxyHzViewModel
 import com.example.galaxyhz.ui.components.InfoNote
 import com.example.galaxyhz.ui.components.SectionHeader
+import com.example.galaxyhz.ui.components.StatRow
 import com.example.galaxyhz.ui.components.StatusHero
 import com.example.galaxyhz.ui.components.TitledCard
 
 @Composable
 fun SettingsScreen(viewModel: GalaxyHzViewModel) {
     val status by viewModel.status.collectAsState()
-    val lang = viewModel.language
+    val lang by viewModel.lang.collectAsState()
     val context = LocalContext.current
 
     StatusHero(
@@ -43,16 +44,16 @@ fun SettingsScreen(viewModel: GalaxyHzViewModel) {
     )
 
     Spacer(Modifier.height(16.dp))
-    SectionHeader(L10n.t("language", lang).uppercase())
+    SectionHeader("APP LANGUAGE")
     Spacer(Modifier.height(8.dp))
-    TitledCard("APP LANGUAGE") {
-        InfoNote("More translations welcome on GitHub.")
+    TitledCard("LANGUAGE (applies instantly)") {
+        InfoNote("The whole UI switches language live, no restart needed.")
         Spacer(Modifier.height(10.dp))
-        androidx.compose.foundation.layout.Row {
+        Row {
             L10n.languages.forEach { (code, name) ->
                 FilterChip(
                     selected = lang == code,
-                    onClick = { viewModel.language = code },
+                    onClick = { viewModel.setLanguage(code) },
                     label = { Text(name) },
                     modifier = Modifier.padding(end = 8.dp)
                 )
@@ -64,18 +65,23 @@ fun SettingsScreen(viewModel: GalaxyHzViewModel) {
     SectionHeader("DEVICE")
     Spacer(Modifier.height(8.dp))
     TitledCard("DETECTED PANEL") {
-        InfoNote("Model: ${status.deviceModel}")
-        InfoNote("Family: ${status.deviceTitle}")
-        InfoNote("Modes found: " + status.availableModes.joinToString { "${it.hz}${it.scanout}" })
+        StatRow("Model", status.deviceModel)
+        StatRow("Family", status.deviceTitle)
+        StatRow("Modes found", status.availableModes.joinToString { "${it.hz}${it.scanout}" })
+        StatRow(
+            "Resolutions",
+            status.availableResolutions.joinToString { it.key }
+        )
     }
 
     Spacer(Modifier.height(16.dp))
     SectionHeader(L10n.t("about", lang).uppercase())
     Spacer(Modifier.height(8.dp))
-    TitledCard("GalaxyHz v2.0") {
+    TitledCard("GalaxyHz v2.1") {
         InfoNote(
             "Forces 120/96/60 Hz and any panel-supported rate on Samsung Galaxy " +
-                "S20-series devices on AOSP ROMs. Material 3 Expressive UI."
+                "S20-series devices on AOSP ROMs. Material 3 Expressive UI, " +
+                "home-screen widget and live FPS readout."
         )
         Spacer(Modifier.height(10.dp))
         Button(

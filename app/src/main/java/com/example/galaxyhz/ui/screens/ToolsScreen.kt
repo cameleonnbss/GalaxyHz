@@ -1,6 +1,5 @@
 package com.example.galaxyhz.ui.screens
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,8 +18,8 @@ import com.example.galaxyhz.theme.ErrorRed
 import com.example.galaxyhz.theme.ExpressiveShapes
 import com.example.galaxyhz.theme.NeonEmerald
 import com.example.galaxyhz.theme.WarnOrange
-import com.example.galaxyhz.ui.L10n
 import com.example.galaxyhz.ui.GalaxyHzViewModel
+import com.example.galaxyhz.ui.components.IconStat
 import com.example.galaxyhz.ui.components.InfoNote
 import com.example.galaxyhz.ui.components.SectionHeader
 import com.example.galaxyhz.ui.components.StatusHero
@@ -32,7 +31,6 @@ fun ToolsScreen(viewModel: GalaxyHzViewModel) {
     val status by viewModel.status.collectAsState()
     val lock by viewModel.lockResult.collectAsState()
     val busy by viewModel.busy.collectAsState()
-    val lang = viewModel.language
 
     StatusHero(
         fps = if (status.currentFps > 0) status.currentFps.toInt() else 0,
@@ -58,28 +56,40 @@ fun ToolsScreen(viewModel: GalaxyHzViewModel) {
             shape = ExpressiveShapes.pill,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(L10n.t("lock_rate", lang), fontWeight = FontWeight.Bold)
+            Text("Lock refresh rate", fontWeight = FontWeight.Bold)
         }
         lock?.let { st ->
             Spacer(Modifier.height(10.dp))
-            Text(
-                when {
-                    st.verified -> "✓ Verified: idle timer 0, content detection off, min = peak"
-                    else -> "✗ Not fully applied — idle:${st.idleTimerZero} " +
-                        "detection:${st.contentDetectionOff} min=peak:${st.minEqualsPeak}. " +
-                        "Is the Magisk module installed?"
-                },
-                color = if (st.verified) NeonEmerald else WarnOrange,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold
-            )
+            IconStat(st.idleTimerZero, "Idle timer disabled", "Idle timer still active")
+            IconStat(st.contentDetectionOff, "Content detection off", "Content detection on")
+            IconStat(st.minEqualsPeak, "min = peak (fixed)", "min != peak (floating)")
+            if (!st.verified) {
+                Spacer(Modifier.height(6.dp))
+                InfoNote(
+                    "Not fully applied. Install the Magisk module so resetprop works, " +
+                        "then retry.", color = WarnOrange
+                )
+            }
         }
+    }
+
+    Spacer(Modifier.height(16.dp))
+    SectionHeader("DEVELOPER OVERLAY")
+    Spacer(Modifier.height(8.dp))
+    TitledCard("SHOW REFRESH RATE") {
+        SwitchRow(
+            title = if (status.showRefreshRateOverlay) "FPS overlay is ON" else "FPS overlay is off",
+            subtitle = "Same as Developer options > 'Show refresh rate'. Draws the live " +
+                "rate in a corner overlay - handy to verify modes actually stick.",
+            checked = status.showRefreshRateOverlay,
+            onCheckedChange = { viewModel.setShowHzOverlay(it) }
+        )
     }
 
     Spacer(Modifier.height(16.dp))
     SectionHeader("ALWAYS-ON DISPLAY")
     Spacer(Modifier.height(8.dp))
-    TitledCard(L10n.t("aod", lang)) {
+    TitledCard("AOD") {
         SwitchRow(
             title = "AOD is ${if (status.isAodEnabled) "ON" else "OFF"}",
             subtitle = "AOD runs the panel in its 60Hz/AID clock region - main flicker source on S20 OLED",
@@ -103,15 +113,25 @@ fun ToolsScreen(viewModel: GalaxyHzViewModel) {
             shape = ExpressiveShapes.pill,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(L10n.t("reset_ddi", lang), color = ErrorRed, fontWeight = FontWeight.Bold)
+            Text("Reset display panel (DDI)", color = ErrorRed, fontWeight = FontWeight.Bold)
         }
     }
 
     Spacer(Modifier.height(16.dp))
     TitledCard("MAGISK MODULE") {
         InfoNote(
-            "Install the companion module so locks and props survive every reboot: " +
-                "flash force_120hz_x1s.zip from the GitHub release."
+            "Install the companion module so locks and props survive every reboot. " +
+                "Export the installed module's zip to your Download folder to inspect " +
+                "or re-flash it:"
         )
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(
+            onClick = { viewModel.exportModuleZip() },
+            enabled = !busy && status.hasRoot,
+            shape = ExpressiveShapes.pill,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Export module zip to Download", fontWeight = FontWeight.Bold)
+        }
     }
 }

@@ -21,9 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /** Destination screens shown in the navigation drawer. */
-enum class Dest {
-    HOME, RESOLUTION, CUSTOM_RATE, ADAPTIVE, OVERCLOCK, TOOLS, SETTINGS
-}
+enum class Dest { HOME, RESOLUTION, CUSTOM_RATE, ADAPTIVE, OVERCLOCK, TOOLS, SETTINGS }
 
 class GalaxyHzViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -47,20 +45,30 @@ class GalaxyHzViewModel(app: Application) : AndroidViewModel(app) {
     private val _selectedDest = MutableStateFlow(Dest.HOME)
     val selectedDest: StateFlow<Dest> = _selectedDest.asStateFlow()
 
-    var language: String
-        get() = prefs.language
-        set(value) {
-            prefs.language = value
-        }
+    // Live language: StateFlow so the UI re-composes instantly, no restart.
+    private val _lang = MutableStateFlow(prefs.language)
+    val lang: StateFlow<String> = _lang.asStateFlow()
 
-    fun selectDest(dest: Dest) {
-        _selectedDest.value = dest
+    fun setLanguage(code: String) {
+        prefs.language = code
+        _lang.value = code
     }
 
-    fun finishSetup() {
-        prefs.setupDone = true
-        _setupDone.value = true
+    fun selectDest(dest: Dest) { _selectedDest.value = dest }
+
+    /** Recommended density for a "WxH" string, keeping physical UI size. */
+    fun autoDensityFor(resolution: String, panelLabel: String): Int {
+        val profile = DeviceProfiles.detect()
+        val h = resolution.substringAfter('x').toIntOrNull() ?: 2400
+        return RefreshRateManager.autoDensity(profile, h)
     }
+
+    /** Applies the auto-computed density for the current resolution. */
+    fun applyAutoDensity(resolution: String, panelLabel: String) {
+        applyDensity(autoDensityFor(resolution, panelLabel))
+    }
+
+    fun finishSetup() { prefs.setupDone = true; _setupDone.value = true }
 
     init {
         viewModelScope.launch {
@@ -77,7 +85,7 @@ class GalaxyHzViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun profile(): DeviceProfile = DeviceProfiles.detect()
 
-    fun openMagiskThread() {
+    fun openMagisk() {
         getApplication<Application>().startActivity(
             Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/topjohnwu/Magisk"))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -86,16 +94,18 @@ class GalaxyHzViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------- actions
 
-    fun applyMode(mode: PanelMode) {
+    fun applyMode(mode: PanelMode, density: Int? = null) {
         viewModelScope.launch {
             _busy.value = true
             _log.value = "Applying ${mode.label} (${mode.scanout})..."
             val res = RefreshRateManager.applyMode(
-                profile(), mode.width, mode.height, mode.hz, mode.panelIndex
+                profile(), mode.width, mode.height, mode.hz, mode.panelIndex, density
             )
-            _log.value = if (res.isSuccess) "Mode ${mode.label} applied!"
+            val actual = RefreshRateManager.actualRenderRate()
+            _log.value = if (res.isSuccess)
+                "Mode ${mode.label} applied - rendering at ${actual} Hz"
             else "Error: ${res.stderr.ifBlank { res.stdout }}"
-            delay(600)
+            delay(500)
             refresh()
             _busy.value = false
         }
@@ -104,10 +114,27 @@ class GalaxyHzViewModel(app: Application) : AndroidViewModel(app) {
     fun applyCustomRate(hz: Int) {
         viewModelScope.launch {
             _busy.value = true
-            _log.value = "Applying custom rate ${hz} Hz..."
-            val p = profile()
-            val res = RefreshRateManager.applyMode(p, 1080, 2400, hz, null)
-            _log.value = if (res.isSuccess) "Custom ${hz} Hz sent (panel only accepts its own modes)"
+            _log.value = "Applying custom ${hz} Hz..."
+            val res = RefreshRateManager.applyCustomRate(profile(), hz)
+            delay(900) // let the framework settle before reading back
+            val actual = RefreshRateManager.actualRenderRate()
+            _log.value = if (res.isSuccess)
+                "Requested ${hz} Hz - panel rendering at ${actual} Hz (nearest supported clock)"
+            else "Error: ${res.stderr.ifBlank { res.stdout }}"
+            refresh()
+            _busy.value = false
+        }
+    }
+
+    fun applyResolution(width: Int, height: Int, density: Int? = null) {
+        viewModelScope.launch {
+            _busy.value = true
+            _log.value = "Switching resolution to ${width}x$height..."
+            val st = _status.value
+            val res = RefreshRateManager.applyResolution(
+                profile(), width, height, st.activeModeHz, density
+            )
+            _log.value = if (res.isSuccess) "Resolution set to ${width}x$height!"
             else "Error: ${res.stderr.ifBlank { res.stdout }}"
             delay(600)
             refresh()
@@ -115,17 +142,14 @@ class GalaxyHzViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun applyResolution(width: Int, height: Int) {
+    fun applyDensity(density: Int) {
         viewModelScope.launch {
             _busy.value = true
-            _log.value = "Switching resolution to ${width}x$height..."
-            val st = _status.value
-            val res = RefreshRateManager.applyResolution(
-                profile(), width, height, st.activeModeHz, null
-            )
-            _log.value = if (res.isSuccess) "Resolution set to ${width}x$height!"
+            _log.value = "Setting density to ${density}dpi..."
+            val res = RefreshRateManager.applyDensity(density)
+            _log.value = if (res.isSuccess) "Density set to ${density}dpi!"
             else "Error: ${res.stderr.ifBlank { res.stdout }}"
-            delay(600)
+            delay(400)
             refresh()
             _busy.value = false
         }
@@ -169,6 +193,21 @@ class GalaxyHzViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun setShowHzOverlay(enable: Boolean) {
+        viewModelScope.launch {
+            _busy.value = true
+            _log.value = if (enable) "Enabling 'Show refresh rate' overlay..." else "Disabling FPS overlay..."
+            val res = RefreshRateManager.setShowRefreshRateOverlay(enable)
+            _log.value = if (res.isSuccess)
+                if (enable) "FPS overlay on - check Developer options / any screen"
+                else "FPS overlay off"
+            else "Error: ${res.stderr.ifBlank { res.stdout }}"
+            delay(300)
+            refresh()
+            _busy.value = false
+        }
+    }
+
     fun resetPanel() {
         viewModelScope.launch {
             _busy.value = true
@@ -190,6 +229,26 @@ class GalaxyHzViewModel(app: Application) : AndroidViewModel(app) {
             else "Error: ${res.stderr.ifBlank { res.stdout }}"
             delay(400)
             refresh()
+            _busy.value = false
+        }
+    }
+
+    /** Copies the module zip to Download so it is explorable in any file manager. */
+    fun exportModuleZip() {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            _busy.value = true
+            _log.value = "Copying module zip to Download..."
+            val res = RootHelper.runCommands(
+                listOf(
+                    "mkdir -p /sdcard/Download",
+                    "cp /data/adb/modules/force_120hz_x1s/module.zip /sdcard/Download/force_120hz_x1s.zip 2>/dev/null || " +
+                        "cp /data/adb/modules_update/force_120hz_x1s/module.zip /sdcard/Download/force_120hz_x1s.zip 2>/dev/null || " +
+                        "echo 'module zip not found - install it from the GitHub release'"
+                )
+            )
+            _log.value = if (res.stdout.contains("not found")) res.stdout.trim()
+            else "Module zip copied to /sdcard/Download/force_120hz_x1s.zip"
             _busy.value = false
         }
     }

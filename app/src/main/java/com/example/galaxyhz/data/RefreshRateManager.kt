@@ -20,8 +20,8 @@ data class PanelMode(
     val width: Int,
     val height: Int,
     val hz: Int,
-    val scanout: String,    // "HS" (high speed) or "NS" (normal speed)
-    val panelIndex: String, // index for the panel driver's display_mode node
+    val scanout: String,
+    val panelIndex: String,
     val experimental: Boolean = false
 ) {
     val label: String get() = "${width}x${height} @ $hz Hz"
@@ -47,14 +47,17 @@ data class LockState(
 
 data class DisplayStatus(
     val currentFps: Float = 0f,
+    val fpsSource: String = "",        // "display" or "surfaceflinger"
     val activeModeHz: Int = 60,
     val resolution: String = "?",
+    val density: Int = 0,
     val panelModeLabel: String = "unknown",
     val minRefreshRate: String = "?",
     val peakRefreshRate: String = "?",
     val refreshRateLocked: Boolean = false,
     val adaptiveMode: AdaptiveMode = AdaptiveMode.FIXED,
     val isAodEnabled: Boolean = false,
+    val showRefreshRateOverlay: Boolean = false,
     val hasRoot: Boolean = false,
     val deviceModel: String = "",
     val deviceTitle: String = "",
@@ -74,25 +77,23 @@ object RefreshRateManager {
 
     /**
      * Parses `cat <panel>/display_mode` lines like
-     * `pdm:1 1080x2400_120HS` (panel modes) and `cpdm:N ...` (compatible modes).
+     * `pdm:1 1080x2400_120HS` (primary) and `cpdm:N ...` (compatible modes).
      */
     @JvmStatic
     fun parsePanelTable(raw: String): List<PanelMode> {
         val out = LinkedHashMap<String, PanelMode>()
         Regex("(pdm|cpdm):(\\d+)\\s+(\\d+)x(\\d+)_(\\d+)(HS|NS)").findAll(raw).forEach { m ->
             val isPrimary = m.groupValues[1] == "pdm"
-            val idx = m.groupValues[2]
             val mode = PanelMode(
                 width = m.groupValues[3].toInt(),
                 height = m.groupValues[4].toInt(),
                 hz = m.groupValues[5].toInt(),
                 scanout = m.groupValues[6],
-                panelIndex = idx,
+                panelIndex = m.groupValues[2],
                 experimental = !isPrimary
             )
             val key = "${mode.width}x${mode.height}_${mode.hz}${mode.scanout}"
             val prev = out[key]
-            // Prefer primary (pdm) entries over compatible (cpdm) ones.
             if (prev == null || (prev.experimental && !mode.experimental)) out[key] = mode
         }
         return out.values
@@ -137,7 +138,8 @@ object RefreshRateManager {
         width: Int,
         height: Int,
         hz: Int,
-        panelIndex: String?
+        panelIndex: String?,
+        density: Int? = null
     ): List<String> {
         val cmds = mutableListOf(
             "cmd power set-mode 0",
@@ -145,8 +147,11 @@ object RefreshRateManager {
             "settings put global low_power_sticky 0",
             "settings put global adaptive_battery_management_enabled 0",
             "settings put global automatically_reduce_refresh_rate 0",
-            "wm size ${width}x$height",
-            "wm density ${profile.defaultDensity}",
+            "wm size ${width}x$height"
+        )
+        // Density: explicit override wins; otherwise auto-scale for the resolution.
+        cmds += "wm density ${density ?: autoDensity(profile, height)}"
+        cmds += listOf(
             "settings put system peak_refresh_rate $hz.0",
             "settings put system min_refresh_rate $hz.0",
             "settings put system user_refresh_rate $hz",
@@ -163,18 +168,56 @@ object RefreshRateManager {
         if (!panelIndex.isNullOrBlank()) {
             cmds += "echo $panelIndex > ${profile.panelBase}/display_mode 2>/dev/null"
         }
-        cmds += "echo $hz > $CONF_FILE"
+        cmds += "echo $hz ${width}x$height > $CONF_FILE"
         return cmds
     }
+
+    /** Density that keeps the same physical UI size across resolutions. */
+    fun autoDensity(profile: DeviceProfile, height: Int): Int =
+        Math.round(profile.defaultDensity * height / 2400f / 10f) * 10
 
     suspend fun applyMode(
         profile: DeviceProfile,
         width: Int,
         height: Int,
         hz: Int,
-        panelIndex: String?
+        panelIndex: String?,
+        density: Int? = null
     ): RootHelper.CommandResult = withContext(Dispatchers.IO) {
-        RootHelper.runCommands(applyModeCommands(profile, width, height, hz, panelIndex), 20_000)
+        RootHelper.runCommands(
+            applyModeCommands(profile, width, height, hz, panelIndex, density), 20_000
+        )
+    }
+
+    /**
+     * Best-effort custom rate: a hybrid min/max window around the requested
+     * value. The framework paces towards it while the panel snaps to its
+     * nearest physical clock - and it actually holds (unlike a peak-only hint).
+     */
+    suspend fun applyCustomRate(profile: DeviceProfile, hz: Int): RootHelper.CommandResult =
+        withContext(Dispatchers.IO) {
+            val lo = maxOf(24, hz - 12)
+            val hi = minOf(240, hz + 12)
+            RootHelper.runCommands(
+                listOf(
+                    "cmd power set-mode 0",
+                    "settings put global low_power 0",
+                    "settings put global automatically_reduce_refresh_rate 0",
+                    "settings put system peak_refresh_rate $hi.0",
+                    "settings put system min_refresh_rate $lo.0",
+                    "settings put system user_refresh_rate $hz",
+                    "settings put system display_refresh_rate $hz",
+                    "settings put system motion_smoothness 2",
+                    "cmd display set-match-content-frame-rate-pref 1"
+                )
+            )
+        }
+
+    /** Reads back the rate SurfaceFlinger is actually rendering at. */
+    suspend fun actualRenderRate(): Int = withContext(Dispatchers.IO) {
+        val out = RootHelper.runCommand("dumpsys SurfaceFlinger").stdout
+        Regex("renderRate=([0-9.]+)").find(out)?.groupValues?.get(1)
+            ?.toFloatOrNull()?.toInt() ?: 0
     }
 
     /**
@@ -184,7 +227,6 @@ object RefreshRateManager {
     suspend fun applyExperimentalRate(profile: DeviceProfile, mode: PanelMode): RootHelper.CommandResult =
         withContext(Dispatchers.IO) {
             val result = applyMode(profile, mode.width, mode.height, mode.hz, mode.panelIndex)
-            // Verify the panel actually took the mode.
             val readBack = RootHelper.runCommand("cat ${profile.panelBase}/display_mode 2>/dev/null").stdout
             val tookIt = readBack.contains("panel_mode:${mode.panelIndex}")
             if (!tookIt && result.isSuccess) {
@@ -232,7 +274,7 @@ object RefreshRateManager {
         RootHelper.runCommands(adaptiveCommands(profile, mode, min, max))
     }
 
-    /** Applies the anti-flicker props AND verifies them, fixing the old silent failure. */
+    /** Applies the anti-flicker props AND verifies them. */
     suspend fun lockRefreshRate(profile: DeviceProfile): LockState = withContext(Dispatchers.IO) {
         RootHelper.runCommands(
             listOf("export PATH=/data/adb/magisk:\$PATH:/system/bin") + adaptiveCommands(
@@ -260,20 +302,37 @@ object RefreshRateManager {
         width: Int,
         height: Int,
         currentHz: Int,
-        currentPanelIndex: String?
+        density: Int? = null
     ): RootHelper.CommandResult = withContext(Dispatchers.IO) {
-        val rate = rateFloat(currentHz)
         RootHelper.runCommands(
             listOf(
                 "wm size ${width}x$height",
-                "wm density ${profile.defaultDensity}",
+                "wm density ${density ?: autoDensity(profile, height)}",
                 "settings put secure screen_resolution_mode ${if (height >= 3000) "0" else "1"}",
-                "cmd display set-user-preferred-display-mode $width $height $rate 0 false",
-                "echo $currentHz > $CONF_FILE"
+                "cmd display set-user-preferred-display-mode $width $height ${rateFloat(currentHz)} 0 false",
+                "echo $currentHz ${width}x$height > $CONF_FILE"
             ),
             timeoutMs = 15_000
         )
     }
+
+    /** Manual density override (applies immediately, does not touch the rate). */
+    suspend fun applyDensity(density: Int): RootHelper.CommandResult =
+        withContext(Dispatchers.IO) {
+            RootHelper.runCommands(listOf("wm density $density"))
+        }
+
+    // ------------------------------------------------- developer options
+
+    suspend fun setShowRefreshRateOverlay(enable: Boolean): RootHelper.CommandResult =
+        withContext(Dispatchers.IO) {
+            RootHelper.runCommands(
+                listOf(
+                    "settings put global show_refresh_rate_overlay ${if (enable) "1" else "0"}",
+                    "cmd surfaceflinger set_debug_sf ${if (enable) "1" else "0"}"
+                )
+            )
+        }
 
     // ---------------------------------------------------------- AOD / panel
 
@@ -307,6 +366,7 @@ object RefreshRateManager {
         val hasRoot = RootHelper.isRootAvailable()
 
         var currentFps = 0f
+        var fpsSource = ""
         var resolution = "?"
         try {
             val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -317,6 +377,7 @@ object RefreshRateManager {
                 currentFps = it.mode.refreshRate
                 resolution = "${it.mode.physicalWidth}x${it.mode.physicalHeight}"
             }
+            if (currentFps > 0) fpsSource = "display"
         } catch (_: Exception) {
         }
 
@@ -324,6 +385,8 @@ object RefreshRateManager {
         var peakRate = "?"
         var panelLabel = "unknown"
         var isAod = false
+        var showHz = false
+        var density = 0
         var modes = profile.fallbackModes
 
         if (hasRoot) {
@@ -332,11 +395,25 @@ object RefreshRateManager {
             RootHelper.runCommand("settings get system peak_refresh_rate").stdout
                 .takeIf { it.isNotBlank() && it != "null" }?.let { peakRate = it }
 
+            // Root fallback for FPS: SurfaceFlinger's actual render rate.
+            val sf = RootHelper.runCommand("dumpsys SurfaceFlinger").stdout
+            Regex("renderRate=([0-9.]+)").find(sf)?.groupValues?.get(1)?.toFloatOrNull()?.let {
+                if (it > 0 && currentFps <= 0f) {
+                    currentFps = it
+                    fpsSource = "surfaceflinger"
+                }
+            }
+
             val pdm = RootHelper.runCommand("cat ${profile.panelBase}/display_mode 2>/dev/null").stdout
             modes = discoverPanelModes(profile)
             panelLabel = panelLabelFromReadout(pdm, modes)
 
             isAod = RootHelper.runCommand("settings get secure doze_always_on").stdout.trim() == "1"
+            showHz = RootHelper.runCommand(
+                "settings get global show_refresh_rate_overlay"
+            ).stdout.trim() == "1"
+            density = RootHelper.runCommand("wm density").stdout
+                .let { Regex("(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0 }
         }
 
         val activeHz = when {
@@ -348,21 +425,24 @@ object RefreshRateManager {
         }
         val adaptive: AdaptiveMode = when {
             minRate.isNotBlank() && peakRate.isNotBlank() && minRate == peakRate -> AdaptiveMode.FIXED
-            minRate != "?" && peakRate != "?" && minRate.toFloatOrNull() != peakRate.toFloatOrNull() ->
-                AdaptiveMode.ADAPTIVE_RANGE
+            minRate != "?" && peakRate != "?" &&
+                minRate.toFloatOrNull() != peakRate.toFloatOrNull() -> AdaptiveMode.ADAPTIVE_RANGE
             else -> AdaptiveMode.FIXED
         }
 
         DisplayStatus(
             currentFps = currentFps,
+            fpsSource = fpsSource,
             activeModeHz = activeHz,
             resolution = resolution,
+            density = density,
             panelModeLabel = panelLabel,
             minRefreshRate = minRate,
             peakRefreshRate = peakRate,
             refreshRateLocked = adaptive == AdaptiveMode.FIXED,
             adaptiveMode = adaptive,
             isAodEnabled = isAod,
+            showRefreshRateOverlay = showHz,
             hasRoot = hasRoot,
             deviceModel = Build.MODEL,
             deviceTitle = DeviceProfiles.familyTitle(profile),
